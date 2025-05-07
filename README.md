@@ -3,7 +3,39 @@
 
 ## 项目简介
 
-本系统实现了基于法律文本的关键词提取，通过集成多种算法提取法律文档中的关键词，并提供关键词的并集和交集，并集作为**可能的关键词**，交集作为**可能的法律术语**，帮助法律从业者快速理解文档内容。系统特别针对中文法律文本进行了优化，能够有效识别并过滤法律特有的结构性文本和日期时间表达式。
+本系统实现了基于法律文本的关键词提取，通过集成多种算法提取法律文档中的关键词，并提供关键词的并集和交集，其中并集作为**可能存在的关键词集合**，交集作为**可能存在的法律术语集合**，帮助法律从业者快速理解文档内容。系统特别针对中文法律文本进行了优化，能够有效识别并过滤法律特有的结构性文本和日期时间表达式。
+
+## 目录结构
+
+```
+Legal-KG/
+├── Config/                        # 配置文件目录
+│   └── stopwords/                 # 停用词表
+│       └── stopwords              # 中文停用词列表
+├── keyword_extractors.py          # 关键词提取器实现文件
+├── main.py                        # 主程序文件
+├── legal_corpus/                  # 法律语料库
+│   ├── constitutional_law/        # 宪法文本
+│   │   └── *.md                   # 宪法相关文件
+│   ├── civil_law/                 # 民法文本
+│   │   └── *.md                   # 民法相关文件
+│   └── ...                        # 其他法律分支
+├── results/                       # 关键词提取结果
+│   └── keyword_results_*.json     # 带时间戳的结果文件
+└── README.md                      # 项目说明文档
+```
+
+### 文件说明
+
+- **keyword_extractors.py**: 实现了8种关键词提取算法，每种算法作为一个类，继承自BaseKeywordExtractor基类。包含了TF-IDF、YAKE、TextRank、RAKE、Embedding、MDKRank、Word2Vec和KeyBERT等方法的实现。
+
+- **keyword_extraction_demo.py**: 主程序文件，负责加载语料库、初始化提取器、处理文本、提取关键词并保存结果。实现了对并集和交集的计算，以及结果的JSON格式化。
+
+- **Config/stopwords/**: 包含中文停用词表，用于过滤常见无意义词汇。
+
+- **legal_corpus/**: 存放按法律分支组织的法律文本，每个文本以Markdown格式存储。
+
+- **results/**: 存放关键词提取结果，以JSON格式保存，包含并集（可能存在的关键词集合）、交集（可能存在的法律术语集合）和各方法单独提取的关键词。
 
 ## 支持的关键词提取算法
 
@@ -47,21 +79,23 @@
 1. 准备语料库：
    ```
    ./legal_corpus/
-     ├── constitutional_law/
+     ├── constitutional_law/        # 宪法文本
      │   ├── file1.md
      │   └── file2.md
-     └── civil_law/
+     └── civil_law/                 # 民法文本
          ├── file3.md
          └── file4.md
    ```
 
-2. 运行关键词提取：
+2. 确保Config目录下有stopwords文件
+
+3. 运行关键词提取：
    ```bash
-   python main.py
+   python keyword_extraction_demo.py
    ```
 
-3. 查看结果：
-   结果将保存在 `./results/` 目录下的 JSON 文件中
+4. 查看结果：
+   结果将保存在 `./keyword_results/` 目录下的 JSON 文件中，文件名带有时间戳
 
 
 
