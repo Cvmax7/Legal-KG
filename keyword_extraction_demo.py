@@ -1,4 +1,6 @@
 import os
+import json
+import datetime
 from keyword_extractors import (
     TFIDFKeywordExtractor,
     YAKEKeywordExtractor,
@@ -10,107 +12,171 @@ from keyword_extractors import (
     KeyBERTKeywordExtractor
 )
 from tqdm import tqdm
- 
-def load_corpus(corpus_dir: str) -> list:
-    """加载语料库"""
-    corpus = []
+from collections import defaultdict
+
+def load_corpus(corpus_dir: str) -> dict:
+    """加载语料库，返回文件夹名到文件内容的映射"""
+    corpus = defaultdict(dict)
     print(f"正在从 {corpus_dir} 加载语料库...")
+    
+    # 只处理指定的文件夹
+    target_folders = ["constitutional_law", "civil_law"]
+    
     for root, _, files in os.walk(corpus_dir):
-        for file in tqdm(files, desc="加载文件"):
+        folder_name = os.path.basename(root)
+        if folder_name == "legal_corpus":  # 跳过根目录
+            continue
+            
+        # 只处理指定的文件夹
+        if folder_name not in target_folders:
+            continue
+            
+        print(f"处理文件夹: {folder_name}")
+        for file in tqdm(files, desc=f"加载 {folder_name} 文件夹"):
             if file.endswith('.md'):
                 try:
-                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                    file_path = os.path.join(root, file)
+                    with open(file_path, 'r', encoding='utf-8') as f:
                         text = f.read().strip()
                         if text:  # 只添加非空文本
-                            corpus.append(text)
+                            corpus[folder_name][file] = text
                 except Exception as e:
                     print(f"警告：无法读取文件 {file}: {str(e)}")
     return corpus
 
-def main():
-    # 示例文本
-    text = """
-    最高人民法院关于审理民间借贷案件适用法律若干问题的规定
-    为正确审理民间借贷纠纷案件，根据《中华人民共和国民法通则》《中华人民共和国合同法》《中华人民共和国民事诉讼法》等相关法律之规定，结合审判实践，制定本规定。
-    第一条 本规定所称的民间借贷，是指自然人、法人、其他组织之间及其相互之间进行资金融通的行为。
-    经金融监管部门批准设立的从事贷款业务的金融机构及其分支机构，因发放贷款等相关金融业务引发的纠纷，不适用本规定。
-    """
+def extract_keywords_from_text(text: str, extractors: dict) -> dict:
+    """使用所有提取器从文本中提取关键词，返回并集和交集"""
+    all_keywords = set()  # 所有关键词的并集
+    method_keywords = {}  # 每个方法提取的关键词
     
-    print("=== 关键词提取演示 ===\n")
-    print("原文：")
-    print(text)
-    print("\n=== 不同方法提取的关键词 ===\n")
+    # 首先获取每个方法的关键词
+    for name, extractor in extractors.items():
+        try:
+            # 提取更多关键词以增加交集的可能性
+            extracted_keywords = set(extractor.extract_keywords(text, top_k=15))
+            method_keywords[name] = extracted_keywords
+            all_keywords.update(extracted_keywords)
+        except Exception as e:
+            print(f"警告：{name} 提取器出错: {str(e)}")
+            method_keywords[name] = set()
+    
+    # 计算交集（所有方法都提取到的关键词）
+    # 过滤掉空集，只考虑有结果的提取器
+    non_empty_sets = [keywords for keywords in method_keywords.values() if keywords]
+    
+    # 如果有至少两个非空集，计算交集
+    if len(non_empty_sets) >= 2:
+        common_keywords = set.intersection(*non_empty_sets)
+    else:
+        common_keywords = set()
+    
+    # 如果交集为空，尝试放宽条件，计算至少2个提取器都提取到的关键词
+    if not common_keywords and len(non_empty_sets) >= 2:
+        # 尝试找出至少被2个提取器都提取到的关键词
+        keyword_count = {}
+        for keywords in non_empty_sets:
+            for keyword in keywords:
+                keyword_count[keyword] = keyword_count.get(keyword, 0) + 1
+        
+        # 找出出现频率至少为3的关键词
+        common_keywords = {keyword for keyword, count in keyword_count.items() if count >= 2}
+    
+    # 返回结果
+    result = {
+        "union": list(all_keywords),  # 所有关键词的并集
+        "intersection": list(common_keywords),  # 交集或常见关键词
+        "methods": {}  # 每种方法提取的关键词
+    }
+    
+    # 添加每种方法提取的关键词
+    for name, keywords in method_keywords.items():
+        result["methods"][name] = list(keywords)
+    
+    return result
+
+def main():
+    # 创建输出目录
+    output_dir = "./keyword_results"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 添加时间戳，避免覆盖之前的结果
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # 加载语料库
     corpus_dir = "./legal_corpus"
-    if os.path.exists(corpus_dir):
-        corpus = load_corpus(corpus_dir)
-        print(f"已加载 {len(corpus)} 篇文档")
-    else:
-        print("警告：未找到语料库目录，将使用示例文本作为语料库")
-        corpus = [text]
+    if not os.path.exists(corpus_dir):
+        print(f"错误：未找到语料库目录 {corpus_dir}")
+        return
+        
+    corpus = load_corpus(corpus_dir)
+    if not corpus:
+        print("错误：语料库为空")
+        return
     
-    try:
-        # 1. TF-IDF方法
-        print("\n1. TF-IDF方法：")
-        tfidf_extractor = TFIDFKeywordExtractor(corpus=corpus)
-        tfidf_keywords = tfidf_extractor.extract_keywords(text, top_k=10)
-        print(f"关键词：{', '.join(tfidf_keywords)}\n")
-        
-        # 2. YAKE方法
-        print("2. YAKE方法：")
-        yake_extractor = YAKEKeywordExtractor()
-        yake_keywords = yake_extractor.extract_keywords(text, top_k=10)
-        print(f"关键词：{', '.join(yake_keywords)}\n")
-        
-        # 3. TextRank方法
-        print("3. TextRank方法：")
-        textrank_extractor = TextRankKeywordExtractor()
-        textrank_keywords = textrank_extractor.extract_keywords(text, top_k=10)
-        print(f"关键词：{', '.join(textrank_keywords)}\n")
-        
-        # 4. RAKE方法
-        print("4. RAKE方法：")
-        rake_extractor = RAKEKeywordExtractor()
-        rake_keywords = rake_extractor.extract_keywords(text, top_k=10)
-        print(f"关键词：{', '.join(rake_keywords)}\n")
-        
-        # 5. 基于嵌入的方法
-        print("5. 基于嵌入的方法：")
-        embedding_extractor = EmbeddingKeywordExtractor()
-        embedding_keywords = embedding_extractor.extract_keywords(text, top_k=10)
-        print(f"关键词：{', '.join(embedding_keywords)}\n")
-        
-        # 6. MDKRank方法
-        print("6. MDKRank方法：")
-        mdkrank_extractor = MDKRankKeywordExtractor()
-        mdkrank_keywords = mdkrank_extractor.extract_keywords(text, top_k=10)
-        print(f"关键词：{', '.join(mdkrank_keywords)}\n")
-        
-        # 7. Word2Vec方法
-        print("7. Word2Vec方法：")
-        word2vec_extractor = Word2VecKeywordExtractor(
-            vector_size=100,  # 词向量维度
-            window=5,         # 上下文窗口大小
-            min_count=1,      # 最小词频
-            n_clusters=10     # 聚类数量
+    print(f"已加载 {sum(len(files) for files in corpus.values())} 个文件，从 {len(corpus)} 个文件夹")
+    for folder_name, files in corpus.items():
+        print(f"  - {folder_name}: {len(files)} 个文件")
+    
+    # 初始化关键词提取器
+    print("初始化关键词提取器...")
+    extractors = {
+        "TF-IDF": TFIDFKeywordExtractor(corpus=[text for files in corpus.values() for text in files.values()]),
+        "YAKE": YAKEKeywordExtractor(),
+        "TextRank": TextRankKeywordExtractor(),
+        "RAKE": RAKEKeywordExtractor(),
+        "Embedding": EmbeddingKeywordExtractor(),
+        "MDKRank": MDKRankKeywordExtractor(),
+        "Word2Vec": Word2VecKeywordExtractor(
+            vector_size=100,
+            window=5,
+            min_count=1,
+            n_clusters=10
+        ),
+        "KeyBERT": KeyBERTKeywordExtractor(
+            model_name="bert-base-chinese",
+            top_n=20
         )
-        word2vec_keywords = word2vec_extractor.extract_keywords(text, top_k=10)
-        print(f"关键词：{', '.join(word2vec_keywords)}\n")
+    }
+    print("关键词提取器初始化完成！")
+    
+    # 处理每个文件夹中的文件
+    results = defaultdict(dict)
+    total_files = sum(len(files) for files in corpus.values())
+    processed_files = 0
+    
+    for folder_name, files in tqdm(corpus.items(), desc="处理文件夹"):
+        print(f"\n处理文件夹：{folder_name}，共 {len(files)} 个文件")
         
-        # 8. KeyBERT方法
-        print("8. KeyBERT方法：")
-        keybert_extractor = KeyBERTKeywordExtractor(
-            model_name="bert-base-chinese",  # 使用中文BERT模型
-            top_n=20       # 候选关键词数量
-        )
-        keybert_keywords = keybert_extractor.extract_keywords(text, top_k=10)
-        print(f"关键词：{', '.join(keybert_keywords)}\n")
-        
-    except Exception as e:
-        print(f"错误：{str(e)}")
-        import traceback
-        traceback.print_exc()
+        for file_name, text in tqdm(files.items(), desc=f"处理 {folder_name} 文件夹"):
+            processed_files += 1
+            print(f"\n[{processed_files}/{total_files}] 处理文件：{file_name}")
+            
+            # 提取关键词
+            print("提取关键词中...")
+            file_keywords = extract_keywords_from_text(text, extractors)
+            
+            # 存储结果
+            results[folder_name][file_name] = file_keywords
+            
+            # 打印进度
+            print(f"已提取关键词：")
+            print(f"并集（所有方法提取的关键词）：{len(file_keywords['union'])}个")
+            print(f"交集（常见关键词）：{len(file_keywords['intersection'])}个")
+            if file_keywords['intersection']:
+                print(f"  交集关键词: {', '.join(file_keywords['intersection'])}")
+            
+            # 打印各方法提取的关键词数量
+            print("各方法提取关键词数量：")
+            for method_name, keywords in file_keywords['methods'].items():
+                print(f"  - {method_name}: {len(keywords)}个")
+    
+    # 保存结果到JSON文件
+    output_file = os.path.join(output_dir, f"keyword_results_{timestamp}.json")
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    
+    print(f"\n结果已保存到：{output_file}")
+    print(f"总共处理了 {processed_files} 个文件，来自 {len(corpus)} 个文件夹")
 
 if __name__ == "__main__":
     main() 

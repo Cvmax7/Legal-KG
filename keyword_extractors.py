@@ -22,6 +22,16 @@ class BaseKeywordExtractor:
     """关键词提取器基类"""
     def __init__(self):
         self.stopwords = self._load_stopwords()
+        # 添加法律文本中常见的章节标记模式
+        self.legal_patterns = [
+            r'第.+条', r'第.+章', r'第.+节', r'第.+款', r'第.+项', r'第.+编',
+            r'第\d+条', r'第\d+章', r'第\d+节', r'第\d+款', r'第\d+项', r'第\d+编',
+            r'第[一二三四五六七八九十百千万亿]+条', r'第[一二三四五六七八九十百千万亿]+章',
+            r'第[一二三四五六七八九十百千万亿]+节', r'第[一二三四五六七八九十百千万亿]+款',
+            r'第[一二三四五六七八九十百千万亿]+项', r'第[一二三四五六七八九十百千万亿]+编',
+            r'^\d+年', r'\d+年', r'\d+月', r'\d+日', r'\d+时', r'\d+分', r'\d+秒',
+            r'\d+年\d+月', r'\d+月\d+日', r'\d+年\d+月\d+日'
+        ]
         
     def _load_stopwords(self) -> Set[str]:
         """加载停用词"""
@@ -34,6 +44,33 @@ class BaseKeywordExtractor:
                     if word:
                         stopwords.add(word)
         return stopwords
+    
+    def _filter_legal_tokens(self, word: str) -> bool:
+        """过滤法律文本中的特殊标记和标点符号"""
+        # 检查是否是法律标记（如第X条、第X章等）
+        for pattern in self.legal_patterns:
+            if re.search(pattern, word):
+                return False
+        
+        # 检查是否是日期或时间格式
+        if re.search(r'^\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?$', word):  # 标准日期格式
+            return False
+            
+        if re.search(r'^\d{1,2}[-/月]\d{1,2}日?$', word):  # 月日格式
+            return False
+            
+        if re.search(r'^\d{1,2}[时:：]\d{1,2}分?$', word):  # 时间格式
+            return False
+            
+        # 检查是否包含标点符号
+        if re.search(r'[^\w\s]', word):
+            return False
+            
+        # 检查是否长度太短或是数字
+        if len(word) < 2 or word.isdigit():
+            return False
+            
+        return True
     
     def extract_keywords(self, text: str, top_k: int = 10) -> List[str]:
         """提取关键词的抽象方法"""
@@ -57,8 +94,7 @@ class TFIDFKeywordExtractor(BaseKeywordExtractor):
         # 分词
         words = [w for w in jieba.cut(text) 
                 if w not in self.stopwords 
-                and len(w) >= 2 
-                and not re.match(r'[^\w\s]', w)]  # 过滤标点符号
+                and self._filter_legal_tokens(w)]
         
         # 计算TF-IDF
         tfidf_matrix = self.vectorizer.transform([text])
@@ -138,7 +174,7 @@ class YAKEKeywordExtractor(BaseKeywordExtractor):
         # 计算每个词的得分
         word_scores = {}
         for word in words:
-            if len(word) < 2:  # 跳过单字词
+            if not self._filter_legal_tokens(word):
                 continue
                 
             # 计算各个特征得分
@@ -171,17 +207,17 @@ class TextRankKeywordExtractor(BaseKeywordExtractor):
         
         # 添加节点
         for word in words:
-            if word not in self.stopwords and len(word) >= 2:
+            if word not in self.stopwords and self._filter_legal_tokens(word):
                 graph.add_node(word)
         
         # 添加边
         for i in range(len(words)):
-            if words[i] in self.stopwords or len(words[i]) < 2:
+            if words[i] in self.stopwords or not self._filter_legal_tokens(words[i]):
                 continue
                 
             for j in range(max(0, i - self.window_size), 
                           min(len(words), i + self.window_size + 1)):
-                if i != j and words[j] not in self.stopwords and len(words[j]) >= 2:
+                if i != j and words[j] not in self.stopwords and self._filter_legal_tokens(words[j]):
                     graph.add_edge(words[i], words[j])
         
         return graph
@@ -237,10 +273,10 @@ class RAKEKeywordExtractor(BaseKeywordExtractor):
         for candidate in candidates:
             words = list(jieba.cut(candidate))
             for word in words:
-                if word not in self.stopwords and len(word) >= 2:
+                if word not in self.stopwords and self._filter_legal_tokens(word):
                     graph.add_node(word)
                     for other_word in words:
-                        if other_word != word and other_word not in self.stopwords and len(other_word) >= 2:
+                        if other_word != word and other_word not in self.stopwords and self._filter_legal_tokens(other_word):
                             if graph.has_edge(word, other_word):
                                 graph[word][other_word]['weight'] += 1
                             else:
@@ -324,7 +360,7 @@ class EmbeddingKeywordExtractor(BaseKeywordExtractor):
         doc_embedding = self._get_document_embedding(text)
         
         # 提取候选关键词
-        words = [w for w in jieba.cut(text) if w not in self.stopwords and len(w) >= 2]
+        words = [w for w in jieba.cut(text) if w not in self.stopwords and self._filter_legal_tokens(w)]
         
         # 计算每个候选关键词的相似度
         keyword_scores = {}
@@ -338,7 +374,7 @@ class EmbeddingKeywordExtractor(BaseKeywordExtractor):
         
         # 按相似度排序并返回top_k个关键词
         sorted_keywords = sorted(keyword_scores.items(), key=lambda x: x[1], reverse=True)
-        return [word for word, _ in sorted_keywords[:top_k]] 
+        return [word for word, _ in sorted_keywords[:top_k]]
 
 
 class MDKRankKeywordExtractor(BaseKeywordExtractor):
@@ -358,11 +394,14 @@ class MDKRankKeywordExtractor(BaseKeywordExtractor):
             words = list(jieba.posseg.cut(text))
             candidates = []
             
-            # 提取名词和形容词短语
+            # 提取名词、动词、形容词短语（法律文本中的关键概念）
             current_phrase = []
+            valid_flags = ('n', 'v', 'a', 'an', 'vn')  # 名词、动词、形容词、名动词
+            
             for word, flag in words:
-                if flag.startswith('n') or flag.startswith('a'):  # 名词或形容词
-                    current_phrase.append(word)
+                if any(flag.startswith(prefix) for prefix in valid_flags):  # 有效词性
+                    if self._filter_legal_tokens(word):
+                        current_phrase.append(word)
                 else:
                     if current_phrase:
                         candidates.append(''.join(current_phrase))
@@ -375,7 +414,7 @@ class MDKRankKeywordExtractor(BaseKeywordExtractor):
             # 过滤停用词和短词
             candidates = [c for c in candidates 
                          if c not in self.stopwords 
-                         and len(c) >= 2]
+                         and self._filter_legal_tokens(c)]
             
             return candidates
         except Exception as e:
@@ -485,10 +524,11 @@ def extract_candidates(tokens_tagged, no_subset=False):
     words_pos = pseg.cut(tokens_tagged)
     candidates = []
     current_candidate = []
+    valid_flags = ('n', 'v', 'a', 'an', 'vn')  # 名词、动词、形容词、名动词
     
     for word, flag in words_pos:
-        # 如果是名词或形容词
-        if flag.startswith('n') or flag.startswith('a'):
+        # 如果是有效词性
+        if any(flag.startswith(prefix) for prefix in valid_flags):
             current_candidate.append(word)
         else:
             if current_candidate:
@@ -540,10 +580,12 @@ class Word2VecKeywordExtractor(BaseKeywordExtractor):
         """预处理文本"""
         # 分词并过滤停用词
         words = []
+        valid_flags = ('n', 'v', 'a', 'an', 'vn')  # 名词、动词、形容词、名动词
+        
         for word, flag in pseg.cut(text):
-            # 只保留名词、动词、形容词
-            if (flag.startswith('n') or flag.startswith('v') or flag.startswith('a')) and \
-               word not in self.stopwords and len(word) >= 2:
+            # 只保留有效词性的词
+            if any(flag.startswith(prefix) for prefix in valid_flags) and \
+               word not in self.stopwords and self._filter_legal_tokens(word):
                 words.append(word)
         return words
     
@@ -699,7 +741,7 @@ class KeyBERTKeywordExtractor(BaseKeywordExtractor):
     def _preprocess_text(self, text: str) -> str:
         """预处理文本"""
         # 使用jieba分词，并过滤停用词
-        words = [w for w in jieba.cut(text) if w not in self.stopwords]
+        words = [w for w in jieba.cut(text) if w not in self.stopwords and self._filter_legal_tokens(w)]
         return ' '.join(words)
     
     def extract_keywords(self, text: str, top_k: int = 10) -> List[str]:
