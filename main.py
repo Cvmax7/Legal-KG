@@ -60,31 +60,33 @@ def extract_keywords_from_text(text: str, extractors: dict) -> dict:
             print(f"警告：{name} 提取器出错: {str(e)}")
             method_keywords[name] = set()
     
-    # 计算交集（所有方法都提取到的关键词）
     # 过滤掉空集，只考虑有结果的提取器
     non_empty_sets = [keywords for keywords in method_keywords.values() if keywords]
     
-    # 如果有至少两个非空集，计算交集
-    if len(non_empty_sets) >= 2:
-        common_keywords = set.intersection(*non_empty_sets)
-    else:
-        common_keywords = set()
+    # 采用多数投票机制，对多种算法的结果进行智能融合
+    # 统计每个关键词被不同提取器识别的次数
+    keyword_votes = {}
+    for keywords in non_empty_sets:
+        for keyword in keywords:
+            keyword_votes[keyword] = keyword_votes.get(keyword, 0) + 1
     
-    # 如果交集为空，尝试放宽条件，计算至少2个提取器都提取到的关键词
-    if not common_keywords and len(non_empty_sets) >= 2:
-        # 尝试找出至少被2个提取器都提取到的关键词
-        keyword_count = {}
-        for keywords in non_empty_sets:
-            for keyword in keywords:
-                keyword_count[keyword] = keyword_count.get(keyword, 0) + 1
-        
-        # 找出出现频率至少为3的关键词
-        common_keywords = {keyword for keyword, count in keyword_count.items() if count >= 2}
+    # 设置投票阈值，根据提取器数量动态调整
+    total_extractors = len(non_empty_sets)
+    if total_extractors >= 5:
+        # 若提取器较多，设置更高阈值以保证质量
+        vote_threshold = max(2, total_extractors // 3)
+    else:
+        # 若提取器较少，使用较低阈值以保证召回
+        vote_threshold = 2 if total_extractors >= 2 else 1
+    
+    # 根据投票阈值筛选高置信度关键词
+    common_keywords = {keyword for keyword, votes in keyword_votes.items() 
+                      if votes >= vote_threshold}
     
     # 返回结果
     result = {
         "union": list(all_keywords),  # 所有关键词的并集
-        "intersection": list(common_keywords),  # 交集或常见关键词
+        "intersection": list(common_keywords),  # 通过投票机制融合的高置信度关键词
         "methods": {}  # 每种方法提取的关键词
     }
     
